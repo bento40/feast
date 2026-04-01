@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chaweng Resort (8 Rai) — Cash Flow Model</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+<style>
+  body { margin:0; font-family: system-ui, -apple-system, sans-serif; background: #f9fafb; color: #1f2937; }
+  input[type=number] { width:96px; padding:2px 6px; border:1px solid #93c5fd; border-radius:4px; text-align:right; font-family:monospace; font-size:12px; color:#1d4ed8; background:#eff6ff; }
+  input[type=number]:focus { outline:none; box-shadow:0 0 0 2px #60a5fa; }
+  .inp-row { display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:4px; }
+  .inp-row label { width:140px; flex-shrink:0; color:#6b7280; }
+  .inp-row .suf { width:52px; flex-shrink:0; color:#9ca3af; font-size:11px; }
+  .grp { margin-bottom:10px; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden; }
+  .grp-hdr { width:100%; display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:#f9fafb; font-size:13px; font-weight:600; color:#374151; cursor:pointer; border:none; }
+  .grp-hdr:hover { background:#f3f4f6; }
+  .grp-body { padding:10px; }
+  .kpi { border-radius:8px; border:1px solid; padding:12px; }
+  .tab-btn { padding:10px 20px; font-size:14px; font-weight:500; border:none; border-bottom:2px solid transparent; background:none; cursor:pointer; color:#6b7280; }
+  .tab-btn.active { border-bottom-color:#2563eb; color:#1d4ed8; background:#eff6ff; }
+  .tab-btn:hover { color:#374151; }
+  table.data { width:100%; font-size:11px; border-collapse:collapse; }
+  table.data th { padding:6px 8px; text-align:right; font-weight:600; color:#4b5563; background:#f3f4f6; position:sticky; top:0; z-index:2; }
+  table.data th:first-child { text-align:left; }
+  table.data td { padding:4px 8px; text-align:right; font-family:monospace; border-top:1px solid #f3f4f6; }
+  table.data td:first-child { text-align:left; font-family:system-ui; font-weight:500; }
+  table.data tr:hover { background:#eff6ff; }
+  table.data tr.ramp { background:#fefce8; }
+  table.data tr.inv-row { background:#fef2f2; font-weight:600; }
+  .neg { color:#dc2626; } .pos { color:#15803d; } .bold { font-weight:700; }
+  .chart-box { background:#fff; border:1px solid #e5e7eb; border-radius:8px; padding:16px; margin-bottom:16px; }
+  .chart-box h3 { font-size:13px; font-weight:600; color:#374151; margin:0 0 12px 0; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div style="background:#fff;border-bottom:1px solid #e5e7eb;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:30;">
+  <div>
+    <h1 style="font-size:18px;font-weight:700;margin:0;" id="hdr-title">Chaweng Resort (8 Rai) — Cash Flow Model</h1>
+    <p style="font-size:12px;color:#6b7280;margin:2px 0 0;" id="hdr-sub">Interactive feasibility • 70 Keys • Chaweng Beach, Koh Samui</p>
+  </div>
+  <button onclick="exportXLSX()" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;">Export Excel</button>
+</div>
+
+<div style="display:flex;">
+  <!-- SIDEBAR -->
+  <div id="sidebar" style="width:280px;flex-shrink:0;background:#fff;border-right:1px solid #e5e7eb;padding:10px;overflow-y:auto;max-height:calc(100vh - 56px);">
+    <div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Assumptions</div>
+  </div>
+
+  <!-- MAIN -->
+  <div style="flex:1;overflow-y:auto;max-height:calc(100vh - 56px);">
+    <div id="tab-bar" style="border-bottom:1px solid #e5e7eb;background:#fff;display:flex;position:sticky;top:0;z-index:10;"></div>
+    <div id="content" style="padding:16px;"></div>
+  </div>
+</div>
+
+<script>
+/* ─── Helpers ─── */
+const fmt = (n, d=0) => new Intl.NumberFormat("en-US",{maximumFractionDigits:d,minimumFractionDigits:d}).format(n);
+const fmtM = n => fmt(n/1e6,1)+"M";
+const fmtPct = n => (n*100).toFixed(1)+"%";
+
+function calcIRR(cfs, guess=0.1) {
+  let r=guess;
+  for(let i=0;i<500;i++){let f=0,df=0;for(let j=0;j<cfs.length;j++){const p=Math.pow(1+r,j);f+=cfs[j]/p;df-=j*cfs[j]/(p*(1+r));}if(Math.abs(df)<1e-12)break;const nr=r-f/df;if(Math.abs(nr-r)<1e-8)return nr;r=Math.max(-0.99,Math.min(10,nr));}
+  return r;
+}
+function calcNPV(rate,cfs){return cfs.reduce((s,cf,i)=>s+cf/Math.pow(1+rate,i),0);}
+
+/* ─── Assumptions (mutable) ─── */
+const A = {
+  landPrice:200000000, transferFeePct:0.03,
+  totalKeys:70, roundADR:4500,
+  buildingSqm:5650, circSqm:3100, landsSqm:6400,
+  buildCost:50000, circCost:15000, landsCost:5000,
+  utilPct:0.10, designPct:0.05, preopPct:0.05, ffePct:0.14,
+  debtPct:0.50, mlrBase:0.07, mlrCap:0.08, mlrGrow:0.0025,
+  roomRatio:0.70, fbRatio:0.30, otherRevPct:0.05,
+  occY1:0.55, occY2:0.62, occY3:0.68,
+  revGrowth:0.03, inflRate:0.03,
+  staffN:55, staffPay:15000, mgtN:12, mgtPay:45000, gmPay:150000,
+  elecPerRoom:12000, waterPerRoom:5000, netPerRoom:5000,
+  maintPct:0.015, suppPct:0.05, sellPct:0.03, fbCostPct:0.50, otherPct:0.01,
+  mgtFeePct:0.0, propTaxPct:0.015, ffeResPct:0.03, capexPct:0.015,
+  discRate:0.08, taxRate:0.20,
+  repayStart:3, repayYears:14, repayGrowth:0.10, repayBase:15000000
+};
+
+/* ─── Compute 30-Year Model ─── */
+function computeModel() {
+  const a = A;
+  const consCost = a.buildingSqm*a.buildCost + a.circSqm*a.circCost + a.landsSqm*a.landsCost;
+  const utilCost = consCost*a.utilPct, desCost = consCost*a.designPct, preoCost = consCost*a.preopPct, ffeCost = consCost*a.ffePct;
+  const transFee = a.landPrice*a.transferFeePct;
+  const totalDev = consCost + utilCost + desCost + preoCost + ffeCost + a.landPrice + transFee;
+  const bankLoan = Math.ceil(totalDev*a.debtPct/1e5)*1e5;
+  const equity = totalDev - bankLoan;
+
+  const mlr = yr => Math.min(a.mlrBase + yr*a.mlrGrow, a.mlrCap);
+  const bY1 = Math.round(bankLoan*0.75/1e5)*1e5, bY0 = bankLoan - bY1;
+  const intYm1 = bY1/2*mlr(0), intY0 = bY1*mlr(1) + bY0/2*mlr(1);
+  const capInt = intYm1 + intY0;
+  const totalProjectCost = totalDev + capInt;
+
+  const repSch = []; let rTot = 0;
+  for(let i=0;i<a.repayYears;i++){const yr=a.repayStart+i;if(i<a.repayYears-1){const am=Math.ceil(a.repayBase*Math.pow(1+a.repayGrowth,i)/1e5)*1e5;repSch.push({yr:yr,amt:am});rTot+=am;}else{repSch.push({yr:yr,amt:Math.max(0,bankLoan-rTot)});}}
+
+  const depB=(consCost+ffeCost)*0.9/30, depF=(consCost+ffeCost)*0.1/5, depC=capInt/30;
+
+  const years=[], capexArr=[];
+  let loan=bankLoan;
+  const losses=[-(intYm1),-(intY0)];
+
+  for(let yr=1;yr<=30;yr++){
+    const occ=yr===1?a.occY1:yr===2?a.occY2:a.occY3;
+    const g=yr<=1?1:Math.pow(1+a.revGrowth,yr-1);
+    const inf=yr<=1?1:Math.pow(1+a.inflRate,yr-1);
+    const adr=a.roundADR*g;
+    const roomRev=a.totalKeys*adr*365*occ;
+    const fbRev=roomRev*a.fbRatio/a.roomRatio;
+    const otherRev=(roomRev+fbRev)*a.otherRevPct;
+    const totalRev=roomRev+fbRev+otherRev;
+
+    const staff=a.staffN*a.staffPay*12*inf, mgt=a.mgtN*a.mgtPay*12*inf, gm=a.gmPay*12*inf;
+    const elec=a.elecPerRoom*a.totalKeys*occ*12*inf, water=a.waterPerRoom*a.totalKeys*occ*12*inf;
+    const maint=roomRev*a.maintPct, net=a.netPerRoom*a.totalKeys*12*inf;
+    const supp=a.suppPct*a.roundADR*a.totalKeys*a.occY1*365*inf;
+    const sell=totalRev*a.sellPct, fbCost=fbRev*a.fbCostPct, oth=totalRev*a.otherPct;
+    const propTax=totalRev*a.propTaxPct, ffeRes=totalRev*a.ffeResPct;
+    const totalOpex=staff+mgt+gm+elec+water+maint+net+supp+sell+fbCost+oth+propTax+ffeRes;
+    const ebitda=totalRev-totalOpex;
+    const ebitdaMargin=totalRev>0?ebitda/totalRev:0;
+
+    const capex=totalRev*a.capexPct; capexArr.push(capex);
+    let d179=0; for(let y=0;y<capexArr.length;y++){if(yr-(y+1)<5)d179+=(y===0?capexArr[y]/2:capexArr[y])/5;}
+    const totalDep=depB+(yr<=5?depF:0)+depC+d179;
+    const ebit=ebitda-totalDep;
+
+    const rate=mlr(yr+1);
+    const intExp=loan*Math.min(rate,a.mlrCap);
+    const rep=repSch.find(function(r){return r.yr===yr;});
+    const repayAmt=rep?rep.amt:0;
+    const ebt=ebit-intExp;
+
+    let ti=ebt;
+    if(ti>0){for(let l=0;l<losses.length;l++){if(losses[l]<0&&ti>0){const u=Math.min(ti,-losses[l]);ti-=u;losses[l]+=u;}}}else{losses.push(ti);ti=0;}
+    const tax=Math.max(0,ti*a.taxRate);
+    const netProfit=ebt-tax;
+    const cfExFin=ebitda-capex-tax;
+    const netCF=cfExFin-intExp-repayAmt;
+    loan=Math.max(0,loan-repayAmt);
+
+    years.push({yr:yr,occ:occ,adr:adr,roomRev:roomRev,fbRev:fbRev,otherRev:otherRev,totalRev:totalRev,totalOpex:totalOpex,ebitda:ebitda,ebitdaMargin:ebitdaMargin,capex:capex,totalDep:totalDep,ebit:ebit,intExp:intExp,repayAmt:repayAmt,ebt:ebt,tax:tax,netProfit:netProfit,cfExFin:cfExFin,netCF:netCF,outstandingLoan:loan});
+  }
+
+  let run=-totalProjectCost; years.forEach(function(y){run+=y.cfExFin;y.accumCF=run;});
+  const cfIRR=[-(totalProjectCost*0.25),-(totalProjectCost*0.75)].concat(years.map(function(y){return y.cfExFin;}));
+  const irr=calcIRR(cfIRR,0.08), npv=calcNPV(a.discRate,cfIRR);
+  let payback=30,pbc=-totalProjectCost;
+  for(let i=0;i<years.length;i++){const p=pbc;pbc+=years[i].cfExFin;if(pbc>0&&p<=0){payback=(i+1)+(-p/years[i].cfExFin);break;}}
+
+  return {consCost:consCost,utilCost:utilCost,desCost:desCost,preoCost:preoCost,ffeCost:ffeCost,transFee:transFee,totalDev:totalDev,totalProjectCost:totalProjectCost,bankLoan:bankLoan,equity:equity,capInt:capInt,years:years,irr:irr,npv:npv,payback:payback};
+}
+
+var M = computeModel();
+var activeTab = "overview";
+var charts = {};
+
+/* ─── Sidebar Builder ─── */
+function buildSidebar() {
+  var sb = document.getElementById("sidebar");
+  sb.innerHTML = '<div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;">Assumptions</div>';
+
+  var groups = [
+    ["Land & Development", [
+      ["Land Price","landPrice","THB",1e7,false],["Transfer Fee","transferFeePct","%",null,true],
+      ["Build Cost/sqm","buildCost","THB",5000,false],["Building Area","buildingSqm","sqm",50,false],
+      ["Circulation","circSqm","sqm",50,false],["Landscape","landsSqm","sqm",100,false],["FF&E %","ffePct","%",null,true]
+    ]],
+    ["Revenue", [
+      ["Total Keys","totalKeys","keys",5,false],["Round ADR","roundADR","THB",100,false],
+      ["Room Rev %","roomRatio","%",null,true],["F&B Rev %","fbRatio","%",null,true],
+      ["Other Rev %","otherRevPct","%",null,true],["Rev Growth","revGrowth","% pa",null,true]
+    ]],
+    ["Occupancy", [
+      ["Year 1","occY1","%",null,true],["Year 2","occY2","%",null,true],["Year 3+","occY3","%",null,true]
+    ]],
+    ["OPEX", [
+      ["Staff Count","staffN","ppl",1,false],["Staff Pay/mth","staffPay","THB",1000,false],
+      ["Mgt Count","mgtN","ppl",1,false],["Mgt Pay/mth","mgtPay","THB",5000,false],
+      ["GM Pay/mth","gmPay","THB",10000,false],["Electricity/rm","elecPerRoom","THB/mth",1000,false],
+      ["Water/rm","waterPerRoom","THB/mth",500,false],["F&B Cost","fbCostPct","% F&B",null,true],
+      ["Selling Exp","sellPct","% Rev",null,true],["Supplies","suppPct","% Room",null,true],
+      ["Maintenance","maintPct","% Room",null,true],["FF&E Reserve","ffeResPct","% Rev",null,true],
+      ["Property Tax","propTaxPct","% Rev",null,true]
+    ]],
+    ["Financing & Tax", [
+      ["Debt %","debtPct","%",null,true],["MLR Base","mlrBase","% pa",null,true],
+      ["MLR Cap","mlrCap","% pa",null,true],["Discount Rate","discRate","%",null,true],
+      ["Tax Rate","taxRate","%",null,true],["Inflation","inflRate","% pa",null,true]
+    ]],
+    ["CAPEX & Repayment", [
+      ["CAPEX %","capexPct","% Rev",null,true],["Repay Start Yr","repayStart","yr",1,false],
+      ["Repay Years","repayYears","yrs",1,false],["Repay Base","repayBase","THB",1e6,false]
+    ]]
+  ];
+
+  groups.forEach(function(group) {
+    var title = group[0], fields = group[1];
+    var grp = document.createElement("div"); grp.className="grp";
+    var hdr = document.createElement("button"); hdr.className="grp-hdr";
+    hdr.innerHTML = title + ' <span style="font-size:11px;">&#9650;</span>';
+    var body = document.createElement("div"); body.className="grp-body";
+    var open = true;
+    hdr.onclick = function() { open=!open; body.style.display=open?"block":"none"; hdr.querySelector("span").innerHTML=open?"&#9650;":"&#9660;"; };
+    grp.appendChild(hdr); grp.appendChild(body);
+
+    fields.forEach(function(field) {
+      var label=field[0], key=field[1], suf=field[2], step=field[3], isPct=field[4];
+      var row = document.createElement("div"); row.className="inp-row";
+      var lbl = document.createElement("label"); lbl.textContent=label;
+      var inp = document.createElement("input"); inp.type="number";
+      inp.value = isPct ? +(A[key]*100).toFixed(4) : A[key];
+      inp.step = step || (isPct ? 0.1 : 1);
+      inp.onchange = inp.oninput = function() {
+        var v = parseFloat(inp.value);
+        if(!isNaN(v)) { A[key] = isPct ? v/100 : v; recalc(); }
+      };
+      var sufEl = document.createElement("span"); sufEl.className="suf"; sufEl.textContent = suf;
+      row.appendChild(lbl); row.appendChild(inp); row.appendChild(sufEl);
+      body.appendChild(row);
+    });
+    sb.appendChild(grp);
+  });
+}
+
+/* ─── Tab Bar ─── */
+function buildTabs() {
+  var bar = document.getElementById("tab-bar");
+  bar.innerHTML = "";
+  var tabNames = {overview:"Overview",assumptions:"Assumptions",cashflow:"Cash Flow",pnl:"P&L"};
+  ["overview","assumptions","cashflow","pnl"].forEach(function(id) {
+    var btn = document.createElement("button"); btn.className="tab-btn"+(activeTab===id?" active":"");
+    btn.textContent = tabNames[id];
+    btn.onclick = function() { activeTab=id; buildTabs(); renderContent(); };
+    bar.appendChild(btn);
+  });
+}
+
+/* ─── Render Content ─── */
+function renderContent() {
+  var el = document.getElementById("content");
+  Object.keys(charts).forEach(function(k){charts[k].destroy(); delete charts[k];});
+
+  if(activeTab==="overview") renderOverview(el);
+  else if(activeTab==="assumptions") renderAssumptions(el);
+  else if(activeTab==="cashflow") renderCashFlow(el);
+  else renderPnL(el);
+}
+
+function kpiHTML(label,value,sub,color) {
+  var c={blue:["#eff6ff","#bfdbfe","#1e40af"],green:["#f0fdf4","#bbf7d0","#166534"],amber:["#fffbeb","#fde68a","#92400e"],red:["#fef2f2","#fecaca","#991b1b"],purple:["#faf5ff","#e9d5ff","#6b21a8"]};
+  var s=c[color]||c.blue;
+  return '<div class="kpi" style="background:'+s[0]+';border-color:'+s[1]+';color:'+s[2]+';"><div style="font-size:11px;font-weight:500;opacity:0.7;margin-bottom:4px;">'+label+'</div><div style="font-size:20px;font-weight:700;">'+value+'</div>'+(sub?'<div style="font-size:11px;opacity:0.6;margin-top:4px;">'+sub+'</div>':'')+'</div>';
+}
+
+function renderOverview(el) {
+  var m=M, a=A;
+  var html = '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;">'
+    +kpiHTML("Total Project Cost","\u0E3F"+fmtM(m.totalProjectCost),"\u0E3F"+fmt(Math.round(m.totalProjectCost/a.totalKeys/1000))+"K/key (incl. cap. int.)","blue")
+    +kpiHTML("NPV","\u0E3F"+fmtM(m.npv),"at "+fmtPct(a.discRate)+" discount",m.npv>=0?"green":"red")
+    +kpiHTML("IRR",fmtPct(m.irr),"Project IRR",m.irr>=a.discRate?"green":"amber")
+    +kpiHTML("Payback",m.payback.toFixed(1)+" yrs","Unlevered",m.payback<=10?"green":"amber")
+    +kpiHTML("Y3 EBITDA","\u0E3F"+fmtM(m.years[2].ebitda),fmtPct(m.years[2].ebitdaMargin)+" margin","purple")
+    +'</div>';
+
+  html += '<div class="chart-box"><h3>Revenue, EBITDA & Net Profit (30 Years)</h3><canvas id="chart1" height="100"></canvas></div>';
+  html += '<div class="chart-box"><h3>Cash Flow (Excl. Financing) & Accumulated</h3><canvas id="chart2" height="95"></canvas></div>';
+
+  var sYrs = [1,2,3,5,7,10,15,20,25,30];
+  html += '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">';
+  html += '<h3 style="font-size:13px;font-weight:600;color:#374151;padding:10px 12px;border-bottom:1px solid #f3f4f6;margin:0;">Summary (Selected Years)</h3>';
+  html += '<div style="overflow-x:auto;"><table class="data"><thead><tr><th style="text-align:left;">Metric</th>';
+  sYrs.forEach(function(yr){html+='<th>Y'+yr+'</th>';});
+  html += '</tr></thead><tbody>';
+  var rows = [["Occupancy",function(y){return fmtPct(y.occ);}],["ADR (THB)",function(y){return fmt(y.adr);}],["Total Revenue",function(y){return "\u0E3F"+fmtM(y.totalRev);}],
+    ["Total OPEX",function(y){return "\u0E3F"+fmtM(y.totalOpex);}],["EBITDA",function(y){return "\u0E3F"+fmtM(y.ebitda);}],["EBITDA Margin",function(y){return fmtPct(y.ebitdaMargin);}],
+    ["Net Profit",function(y){return "\u0E3F"+fmtM(y.netProfit);}],["CF ex-Fin",function(y){return "\u0E3F"+fmtM(y.cfExFin);}],["Accum CF",function(y){return "\u0E3F"+fmtM(y.accumCF);}]];
+  rows.forEach(function(row){
+    html+='<tr><td>'+row[0]+'</td>';
+    sYrs.forEach(function(yr){var y=m.years[yr-1]; html+='<td>'+(y?row[1](y):"\u2014")+'</td>';});
+    html+='</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  el.innerHTML = html;
+
+  var labels = m.years.map(function(y){return "Y"+y.yr;});
+  charts.c1 = new Chart(document.getElementById("chart1"), {
+    type:'bar', data:{
+      labels:labels,
+      datasets:[
+        {type:'bar',label:'Revenue',data:m.years.map(function(y){return y.totalRev;}),backgroundColor:'rgba(59,130,246,0.25)',borderColor:'#3b82f6',borderWidth:1,order:3},
+        {type:'line',label:'EBITDA',data:m.years.map(function(y){return y.ebitda;}),borderColor:'#10b981',borderWidth:2,pointRadius:0,fill:false,order:2},
+        {type:'line',label:'Net Profit',data:m.years.map(function(y){return y.netProfit;}),borderColor:'#8b5cf6',borderWidth:1.5,borderDash:[4,2],pointRadius:0,fill:false,order:1}
+      ]
+    },
+    options:{responsive:true,interaction:{mode:'index',intersect:false},plugins:{tooltip:{callbacks:{label:function(ctx){return ctx.dataset.label+': \u0E3F'+fmt(ctx.raw);}}}},
+      scales:{x:{grid:{display:false}},y:{ticks:{callback:function(v){return (v/1e6).toFixed(0)+"M";}}}}}
+  });
+
+  charts.c2 = new Chart(document.getElementById("chart2"), {
+    type:'bar', data:{
+      labels:labels,
+      datasets:[
+        {type:'bar',label:'CF ex-Fin',data:m.years.map(function(y){return y.cfExFin;}),backgroundColor:'#60a5fa',order:2},
+        {type:'line',label:'Accum CF',data:m.years.map(function(y){return y.accumCF;}),borderColor:'#ef4444',borderWidth:2,pointRadius:0,fill:false,yAxisID:'y1',order:1}
+      ]
+    },
+    options:{responsive:true,interaction:{mode:'index',intersect:false},plugins:{tooltip:{callbacks:{label:function(ctx){return ctx.dataset.label+': \u0E3F'+fmt(ctx.raw);}}}},
+      scales:{x:{grid:{display:false}},y:{position:'left',ticks:{callback:function(v){return (v/1e6).toFixed(0)+"M";}}},y1:{position:'right',grid:{drawOnChartArea:false},ticks:{callback:function(v){return (v/1e6).toFixed(0)+"M";}}}}}
+  });
+}
+
+function renderAssumptions(el) {
+  var m=M, a=A;
+  var html = '<div class="chart-box"><h3>Development Cost Breakdown</h3><table class="data">';
+  var devRows = [
+    ["Building Construction",fmt(a.buildingSqm)+" sqm \u00D7 \u0E3F"+fmt(a.buildCost)+"/sqm",a.buildingSqm*a.buildCost],
+    ["Circulation",fmt(a.circSqm)+" sqm \u00D7 \u0E3F"+fmt(a.circCost)+"/sqm",a.circSqm*a.circCost],
+    ["Landscape",fmt(a.landsSqm)+" sqm \u00D7 \u0E3F"+fmt(a.landsCost)+"/sqm",a.landsSqm*a.landsCost],
+    ["\u2014 Subtotal Construction","",m.consCost],
+    ["Utilities",fmtPct(a.utilPct)+" of construction",m.utilCost],
+    ["Design Fee",fmtPct(a.designPct)+" of construction",m.desCost],
+    ["Pre-Operation",fmtPct(a.preopPct)+" of construction",m.preoCost],
+    ["FF&E",fmtPct(a.ffePct)+" of construction",m.ffeCost],
+    ["Land Purchase","Freehold (Chanote)",a.landPrice],
+    ["Transfer Fee",fmtPct(a.transferFeePct)+" of land",m.transFee],
+    ["TOTAL DEV COST","\u0E3F"+fmt(Math.round(m.totalDev/a.totalKeys))+" per key",m.totalDev]
+  ];
+  devRows.forEach(function(r){
+    var bold=r[0].indexOf("Subtotal")>=0||r[0].indexOf("TOTAL")>=0;
+    html+='<tr style="'+(bold?"font-weight:700;border-top:2px solid #d1d5db;":"")+'"><td>'+r[0]+'</td><td style="color:#6b7280;font-size:11px;font-family:system-ui;">'+r[1]+'</td><td>\u0E3F'+fmt(r[2])+'</td></tr>';
+  });
+  html += '</table></div>';
+
+  html += '<div class="chart-box"><h3>Financing Structure</h3><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">'
+    +'<div style="background:#eff6ff;border-radius:8px;padding:12px;"><div style="font-size:11px;color:#2563eb;font-weight:500;">Bank Loan ('+fmtPct(a.debtPct)+')</div><div style="font-size:18px;font-weight:700;color:#1e40af;">\u0E3F'+fmtM(m.bankLoan)+'</div></div>'
+    +'<div style="background:#f0fdf4;border-radius:8px;padding:12px;"><div style="font-size:11px;color:#16a34a;font-weight:500;">Equity ('+fmtPct(1-a.debtPct)+')</div><div style="font-size:18px;font-weight:700;color:#166534;">\u0E3F'+fmtM(m.equity)+'</div></div>'
+    +'<div style="background:#f9fafb;border-radius:8px;padding:12px;"><div style="font-size:11px;color:#4b5563;font-weight:500;">Construction Interest</div><div style="font-size:18px;font-weight:700;color:#1f2937;">\u0E3F'+fmtM(m.capInt)+'</div></div>'
+    +'</div></div>';
+
+  html += '<div class="chart-box"><h3>Occupancy & ADR Trajectory</h3><canvas id="chart3" height="85"></canvas></div>';
+  el.innerHTML = html;
+
+  charts.c3 = new Chart(document.getElementById("chart3"), {
+    type:'bar', data:{
+      labels:M.years.map(function(y){return "Y"+y.yr;}),
+      datasets:[
+        {type:'bar',label:'Occupancy %',data:M.years.map(function(y){return y.occ*100;}),backgroundColor:'#a78bfa',yAxisID:'y',order:2},
+        {type:'line',label:'ADR (THB)',data:M.years.map(function(y){return y.adr;}),borderColor:'#f59e0b',borderWidth:2,pointRadius:0,fill:false,yAxisID:'y1',order:1}
+      ]
+    },
+    options:{responsive:true,interaction:{mode:'index',intersect:false},
+      scales:{x:{grid:{display:false}},y:{position:'left',min:0,max:100,ticks:{callback:function(v){return v+"%";}}},y1:{position:'right',grid:{drawOnChartArea:false},ticks:{callback:function(v){return "\u0E3F"+fmt(v);}}}}}
+  });
+}
+
+function renderCashFlow(el) {
+  var m=M;
+  var html = '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">';
+  html += '<h3 style="font-size:13px;font-weight:600;color:#374151;padding:10px 12px;border-bottom:1px solid #f3f4f6;margin:0;">30-Year Cash Flow (THB)</h3>';
+  html += '<div style="overflow-x:auto;max-height:calc(100vh - 160px);overflow-y:auto;">';
+  html += '<table class="data"><thead><tr><th style="text-align:left;position:sticky;left:0;z-index:3;background:#f3f4f6;">Year</th><th>Occ%</th><th>ADR</th><th>Room Rev</th><th>F&B Rev</th><th>Other Rev</th><th style="font-weight:800;">Total Rev</th><th>OPEX</th><th style="font-weight:800;">EBITDA</th><th>Margin</th><th>Interest</th><th>Tax</th><th>CAPEX</th><th style="font-weight:800;">CF ex-Fin</th><th>Repay</th><th style="font-weight:800;">Net CF</th><th>Accum CF</th><th>Loan Bal</th></tr></thead><tbody>';
+  html += '<tr class="inv-row"><td style="position:sticky;left:0;background:#fef2f2;">Inv</td><td colspan="5"></td><td>\u2014</td><td colspan="5"></td><td>\u2014</td><td class="neg">('+fmt(m.totalProjectCost)+')</td><td colspan="2"></td><td class="neg">('+fmt(m.totalProjectCost)+')</td><td>'+fmt(m.bankLoan)+'</td></tr>';
+
+  m.years.forEach(function(y){
+    var ramp=y.yr<=3?' class="ramp"':'';
+    var bg=y.yr<=3?'#fefce8':'#fff';
+    html+='<tr'+ramp+'>';
+    html+='<td style="position:sticky;left:0;background:'+bg+';font-weight:600;">'+y.yr+'</td>';
+    html+='<td>'+(y.occ*100).toFixed(0)+'%</td>';
+    html+='<td>'+fmt(y.adr)+'</td>';
+    html+='<td>'+fmt(y.roomRev)+'</td>';
+    html+='<td>'+fmt(y.fbRev)+'</td>';
+    html+='<td>'+fmt(y.otherRev)+'</td>';
+    html+='<td class="bold">'+fmt(y.totalRev)+'</td>';
+    html+='<td class="neg">('+fmt(y.totalOpex)+')</td>';
+    html+='<td class="bold pos">'+fmt(y.ebitda)+'</td>';
+    html+='<td>'+(y.ebitdaMargin*100).toFixed(0)+'%</td>';
+    html+='<td style="color:#ea580c;">'+(y.intExp>0?'('+fmt(y.intExp)+')':'\u2014')+'</td>';
+    html+='<td class="neg">'+(y.tax>0?'('+fmt(y.tax)+')':'\u2014')+'</td>';
+    html+='<td>'+fmt(y.capex)+'</td>';
+    html+='<td class="bold">'+fmt(y.cfExFin)+'</td>';
+    html+='<td style="color:#ea580c;">'+(y.repayAmt>0?'('+fmt(y.repayAmt)+')':'\u2014')+'</td>';
+    html+='<td class="bold '+(y.netCF>=0?'pos':'neg')+'">'+fmt(y.netCF)+'</td>';
+    html+='<td class="'+(y.accumCF>=0?'pos':'neg')+'">'+fmt(y.accumCF)+'</td>';
+    html+='<td style="color:#6b7280;">'+(y.outstandingLoan>0?fmt(y.outstandingLoan):'\u2014')+'</td>';
+    html+='</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  el.innerHTML = html;
+}
+
+function renderPnL(el) {
+  var m=M;
+  var html = '<div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">';
+  html += '<h3 style="font-size:13px;font-weight:600;color:#374151;padding:10px 12px;border-bottom:1px solid #f3f4f6;margin:0;">Profit & Loss Statement (THB)</h3>';
+  html += '<div style="overflow-x:auto;max-height:calc(100vh - 160px);overflow-y:auto;">';
+  html += '<table class="data"><thead><tr><th style="text-align:left;min-width:140px;position:sticky;left:0;z-index:3;background:#f3f4f6;">Item</th>';
+  m.years.forEach(function(y){html+='<th style="min-width:90px;">Y'+y.yr+'</th>';});
+  html += '</tr></thead><tbody>';
+
+  var pnlRows = [
+    {label:"Room Revenue",key:"roomRev"},{label:"F&B Revenue",key:"fbRev"},{label:"Other Revenue",key:"otherRev"},
+    {label:"Total Revenue",key:"totalRev",bold:true,bg:"#eff6ff"},
+    {label:"Operating Expense",key:"totalOpex",neg:true},
+    {label:"EBITDA",key:"ebitda",bold:true,bg:"#f0fdf4"},
+    {label:"EBITDA Margin",key:"ebitdaMargin",pct:true},
+    {label:"Depreciation",key:"totalDep",neg:true},
+    {label:"EBIT",key:"ebit",bold:true},
+    {label:"Interest Expense",key:"intExp",neg:true},
+    {label:"EBT",key:"ebt",bold:true},
+    {label:"Corporate Tax",key:"tax",neg:true},
+    {label:"Net Profit",key:"netProfit",bold:true,bg:"#faf5ff"}
+  ];
+
+  pnlRows.forEach(function(r){
+    var bgStyle=r.bg?'background:'+r.bg+';':'background:#fff;';
+    html+='<tr style="'+(r.bg?'background:'+r.bg+';':'')+(r.bold?'font-weight:700;':'')+'border-top:1px solid #f3f4f6;">';
+    html+='<td style="position:sticky;left:0;'+bgStyle+(r.bold?'font-weight:700;':'')+'">'+r.label+'</td>';
+    m.years.forEach(function(y){
+      var v=y[r.key];
+      var cls=v<0?"neg":"";
+      var display=r.pct?fmtPct(v):(r.neg&&v>0?"("+fmt(v)+")":fmt(v));
+      html+='<td class="'+cls+'" style="'+(r.bold?'font-weight:700;':'')+'">'+display+'</td>';
+    });
+    html+='</tr>';
+  });
+  html += '</tbody></table></div></div>';
+  el.innerHTML = html;
+}
+
+/* ─── Excel Export ─── */
+function exportXLSX() {
+  var a=A, m=M;
+  var wb = XLSX.utils.book_new();
+  var hdr = ["Year","Occupancy","ADR","Room Revenue","F&B Revenue","Other Revenue","Total Revenue","Total OPEX","EBITDA","EBITDA %","Depreciation","EBIT","Interest","EBT","Tax","Net Profit","CAPEX","CF ex-Fin","Accum CF","Loan Repay","Net CF"];
+  var dataRows = m.years.map(function(y){return [y.yr,y.occ,Math.round(y.adr),Math.round(y.roomRev),Math.round(y.fbRev),Math.round(y.otherRev),Math.round(y.totalRev),Math.round(y.totalOpex),Math.round(y.ebitda),y.ebitdaMargin,Math.round(y.totalDep),Math.round(y.ebit),Math.round(y.intExp),Math.round(y.ebt),Math.round(y.tax),Math.round(y.netProfit),Math.round(y.capex),Math.round(y.cfExFin),Math.round(y.accumCF),Math.round(y.repayAmt),Math.round(y.netCF)];});
+  var rows = [
+    ["Chaweng Resort (8 Rai Project) - Cash Flow Model"],[],["ASSUMPTIONS"],
+    ["Land Price (THB)",a.landPrice],["Transfer Fee %",a.transferFeePct],["Total Keys",a.totalKeys],["Round ADR (THB)",a.roundADR],
+    ["Building (sqm)",a.buildingSqm],["Build Cost (THB/sqm)",a.buildCost],["Debt %",a.debtPct],["Discount Rate",a.discRate],
+    ["Occupancy Y1",a.occY1],["Occupancy Y2",a.occY2],["Occupancy Y3+",a.occY3],
+    ["Revenue Growth",a.revGrowth],["Inflation",a.inflRate],["Tax Rate",a.taxRate],
+    [],["DEVELOPMENT COST"],["Construction",m.consCost],["FF&E",m.ffeCost],["Land",a.landPrice],["Transfer Fee",m.transFee],
+    ["Total Dev Cost",m.totalDev],["Bank Loan",m.bankLoan],["Equity",m.equity],
+    [],["KEY METRICS"],["NPV at "+fmtPct(a.discRate),Math.round(m.npv)],["IRR",m.irr],["Payback (years)",Math.round(m.payback*10)/10],
+    [],["CASH FLOW PROJECTION"],hdr
+  ].concat(dataRows);
+  var ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"]=[{wch:18},{wch:14},{wch:10},{wch:15},{wch:15},{wch:15},{wch:16},{wch:15},{wch:14},{wch:10},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:14},{wch:16},{wch:14},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, ws, "Cash Flow");
+  XLSX.writeFile(wb, "Cash Flow (8 Rai Chaweng Resort).xlsx");
+}
+
+/* ─── Recalculate & Refresh ─── */
+function recalc() {
+  M = computeModel();
+  document.getElementById("hdr-sub").textContent = "Interactive feasibility \u2022 "+A.totalKeys+" Keys \u2022 Chaweng Beach, Koh Samui";
+  renderContent();
+}
+
+/* ─── Init ─── */
+buildSidebar();
+buildTabs();
+renderContent();
+</script>
+</body>
+</html>
